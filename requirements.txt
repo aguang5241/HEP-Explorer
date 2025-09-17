@@ -1,9 +1,9 @@
-streamlit
-numpy
-pandas
-matplotlib
-plotly
-torch
-pyro-ppl
+streamlit==1.49.1
+numpy==1.26.4
+pandas==2.3.1
+matplotlib==3.6.2
+plotly==5.11.0
+torch==2.6.0
+pyro-ppl==1.9.1
 scikit-learn==1.6.1
-umap-learn
+umap-learn==0.5.9.post2
