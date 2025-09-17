@@ -5,8 +5,9 @@ import numpy as np
 import streamlit as st
 import torch
 import pyro
-import pickle
+import joblib
 import plotly.express as px
+import plotly.graph_objects as go
 
 
 torch.classes.__path__ = []
@@ -59,37 +60,66 @@ class BNN(pyro.nn.PyroModule):
         return mu
 
 
-def BNN_predictor(data_pre):
+def BNN_predictor(site, data_pre):
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    # Load the x and y scaler
-    with open('res/scaler_x_BNN.pkl', 'rb') as f:
-        x_scaler = pickle.load(f)
-    with open('res/scaler_y_BNN.pkl', 'rb') as f:
-        y_scaler = pickle.load(f)
+    # Load the x and y scalers and the train data
+    if site == 'A-site':
+        with open('res/x_scaler_A.pkl', 'rb') as f:
+            x_scaler = joblib.load(f)
+        with open('res/y_scaler_A.pkl', 'rb') as f:
+            y_scaler = joblib.load(f)
+        with open('res/x_train_A.pkl', 'rb') as f:
+            x_train = joblib.load(f)
+        with open('res/y_train_A.pkl', 'rb') as f:
+            y_train = joblib.load(f)
+        model_path = 'res/model_A.pkl'
+    else:
+        with open('res/x_scaler_B.pkl', 'rb') as f:
+            x_scaler = joblib.load(f)
+        with open('res/y_scaler_B.pkl', 'rb') as f:
+            y_scaler = joblib.load(f)
+        with open('res/x_train_B.pkl', 'rb') as f:
+            x_train = joblib.load(f)
+        with open('res/y_train_B.pkl', 'rb') as f:
+            y_train = joblib.load(f)
+        model_path = 'res/model_B.pkl'
 
-    # Load the train data
-    with open('res/train_x_BNN.pkl', 'rb') as f:
-        train_x = pickle.load(f)
-    with open('res/train_y_BNN.pkl', 'rb') as f:
-        train_y = pickle.load(f)
-    train_x = torch.FloatTensor(train_x).to(DEVICE)
-    train_y = torch.FloatTensor(train_y).to(DEVICE)
+    # Get the training data
+    train_x = torch.FloatTensor(x_train).to(DEVICE)
+    train_y = torch.FloatTensor(y_train).to(DEVICE)
 
     # Get the input data to predict
-    x_pre = data_pre[['atomic_number_A','atomic_number_B','ionic_radius_A','ionic_radius_B','dopant_concentration_A','dopant_concentration_B']].to_numpy()
+    x_pre = data_pre[[
+        'atomic_number_1', 'atomic_number_2', 'atomic_number_3', 'atomic_number_4',
+        'ionic_radius_1', 'ionic_radius_2', 'ionic_radius_3', 'ionic_radius_4',
+        'atomic_concentration_1', 'atomic_concentration_2', 'atomic_concentration_3', 'atomic_concentration_4',
+        'T'
+    ]].to_numpy()
     x_pre = x_scaler.transform(x_pre)
     x_pre = torch.FloatTensor(x_pre).to(DEVICE)
 
     # Define the model
-    model_path = 'res/model_BNN.pkl'
-    IN_FEATURES = 6
-    OUT_FEATURES = 3
-    N_LAYERS = 2
-    PRIOR_SCALE_WEIGHT = 1.1127440261121575
-    PRIOR_SCALE_BIAS = 0.21609393343755173
-    NODES_LIST = [26, 44]
-    LR = 0.009945018994994233
-    PREIDCTIVE_SAMPLES = 1000
+    if site == 'A-site':
+        model_path = 'res/model_A.pkl'
+        IN_FEATURES = 13
+        OUT_FEATURES = 4
+        N_LAYERS = 2
+        PRIOR_SCALE_WEIGHT = 0.4082109636101447
+        PRIOR_SCALE_BIAS = 0.5321222164940764
+        NODES_LIST = [26, 34]
+        LR = 0.009981166029931921
+    else:
+        model_path = 'res/model_B.pkl'
+        IN_FEATURES = 13
+        OUT_FEATURES = 4
+        N_LAYERS = 2
+        PRIOR_SCALE_WEIGHT = 0.5552777841477516
+        PRIOR_SCALE_BIAS = 0.03737628946174844
+        NODES_LIST = [26, 28]
+        LR = 0.009940260795305739
+
+    # Start the prediction
+    PREDICTIVE_SAMPLES = 1000
     torch.manual_seed(0)
     model = BNN(in_features=IN_FEATURES, out_features=OUT_FEATURES, n_layers=N_LAYERS, prior_scale_weight=PRIOR_SCALE_WEIGHT, prior_scale_bias=PRIOR_SCALE_BIAS, nodes_list=NODES_LIST).to(DEVICE)
     # Define variational guide
@@ -101,7 +131,7 @@ def BNN_predictor(data_pre):
     # Stochastic Variational Inference
     svi = pyro.infer.SVI(model, guide, optimizer, loss=loss_func)
     # Predictive
-    predictive = pyro.infer.Predictive(model, guide=guide, num_samples=PREIDCTIVE_SAMPLES)
+    predictive = pyro.infer.Predictive(model, guide=guide, num_samples=PREDICTIVE_SAMPLES)
     # Load the model
     pyro.clear_param_store()
     from functools import partial
@@ -118,88 +148,70 @@ def BNN_predictor(data_pre):
         y_std = preds['obs'].std(0).cpu().numpy()
         y_pre = y_scaler.inverse_transform(y_pre)
         y_std = y_std * y_scaler.scale_
-        data_pred_BNN = pd.concat([data_pre, pd.DataFrame(y_pre, columns=['F', 'lattice_distortion', 'atomic_distortion']), pd.DataFrame(y_std, columns=['F_std', 'lattice_distortion_std', 'atomic_distortion_std'])], axis=1)
-        data_pred_BNN = data_pred_BNN[['atomic_number_A', 'atomic_number_B', 'ionic_radius_A', 'ionic_radius_B', 'dopant_concentration_A', 'dopant_concentration_B', 'oxygen_vacancy_concentration', 'T', 'F', 'lattice_distortion', 'atomic_distortion', 'F_std', 'lattice_distortion_std', 'atomic_distortion_std']]
+        data_pred = pd.concat([data_pre, pd.DataFrame(y_pre, columns=['Ef', 'D_lattice', 'D_atomic', 'D_negative']), pd.DataFrame(y_std, columns=['Ef_std', 'D_lattice_std', 'D_atomic_std', 'D_negative_std'])], axis=1)
 
-    return data_pred_BNN
+    return data_pred
 
 
-def get_dopant_data(dopant_A, dopant_B, dopant_A_conc, dopant_B_conc, oxygen_vacancy_concentration, T):
-    # Define the atomic numbers and ionic radii for the dopants
-    atomic_numbers = {'Mg': 12, 'Ca': 20, 'Sr': 38, 'Ba': 56, 'Ce': 58, 
-                    'Pr': 59, 'Nd': 60, 'Sm': 62, 'Gd': 64, 'Sc': 21, 
-                    'Ti': 22, 'V': 23, 'Cr': 24, 'Mn': 25, 'Fe': 26, 
-                    'Ni': 28, 'Cu': 29, 'Zn': 30, 'Al': 13, 'Ga': 31}
-    ionic_radii = {'Mg': 0.890, 'Ca': 1.340, 'Sr': 1.440, 'Ba': 1.610, 'Ce': 1.340, 
-                'Pr': 1.179, 'Nd': 1.270, 'Sm': 1.240, 'Gd': 1.107, 'Sc': 0.745, 
-                'Ti': 0.670, 'V': 0.640, 'Cr': 0.615, 'Mn': 0.645, 'Fe': 0.645, 
-                'Ni': 0.600, 'Cu': 0.540, 'Zn': 0.740, 'Al': 0.535, 'Ga': 0.620}
-    
-    # Get the atomic number and ionic radius for A-site dopant
-    if dopant_A != 'None':
-        atomic_number_A = atomic_numbers[dopant_A]
-        ionic_radius_A = ionic_radii[dopant_A]
-        dopant_concentrations_A = np.arange(dopant_A_conc[0], dopant_A_conc[1] + 1, 1)
+def get_dopant_data(site, element_conc, temperature):
+    # Load the compositional space
+    compositional_space = joblib.load('res/data_all.pkl')
+
+    # Filter the compositional space based on the selected elements and their concentration ranges
+    elements = list(element_conc.keys())
+    atom_ranges = [(int(conc[0]/100*80), int(conc[1]/100*80)) for conc in element_conc.values()]
+    a_ranges, b_ranges, c_ranges, d_ranges, e_ranges = atom_ranges
+    data_pre = compositional_space.copy()
+    data_pre = data_pre[
+        (data_pre['a'] >= a_ranges[0]) & (data_pre['a'] <= a_ranges[1]) &
+        (data_pre['b'] >= b_ranges[0]) & (data_pre['b'] <= b_ranges[1]) &
+        (data_pre['c'] >= c_ranges[0]) & (data_pre['c'] <= c_ranges[1]) &
+        (data_pre['d'] >= d_ranges[0]) & (data_pre['d'] <= d_ranges[1]) &
+        (data_pre['e'] >= e_ranges[0]) & (data_pre['e'] <= e_ranges[1])
+    ].reset_index(drop=True)
+    data_pre = data_pre.rename(columns={'a': elements[0], 'b': elements[1], 'c': elements[2], 'd': elements[3], 'e': elements[4]})
+
+    # Remove the column of La or Co
+    if site == 'A-site':
+        data_pre = data_pre.drop(columns=['La'])
     else:
-        atomic_number_A = 0
-        ionic_radius_A = 0
-        dopant_concentrations_A = [0]
-    
-    # Get the atomic number and ionic radius for B-site dopant
-    if dopant_B != 'None':
-        atomic_number_B = atomic_numbers[dopant_B]
-        ionic_radius_B = ionic_radii[dopant_B]
-        dopant_concentrations_B = np.arange(dopant_B_conc[0], dopant_B_conc[1] + 1, 1)
-    else:
-        atomic_number_B = 0
-        ionic_radius_B = 0
-        dopant_concentrations_B = [0]
+        data_pre = data_pre.drop(columns=['Co'])
 
-    # Create a DataFrame to store the data
-    data_pre = pd.DataFrame()
-    for i, A_conc in enumerate(dopant_concentrations_A):
-        for j, B_conc in enumerate(dopant_concentrations_B):
-            data_row = pd.DataFrame({
-                'atomic_number_A': [atomic_number_A],
-                'atomic_number_B': [atomic_number_B],
-                'ionic_radius_A': [ionic_radius_A],
-                'ionic_radius_B': [ionic_radius_B],
-                'dopant_concentration_A': [A_conc/100],
-                'dopant_concentration_B': [B_conc/100],
-                'oxygen_vacancy_concentration': [oxygen_vacancy_concentration/100],
-                'T': [T],
-            })
-            data_pre = pd.concat([data_pre, data_row], ignore_index=True)
+    # Get the elements from the columns
+    elements_ = data_pre.columns.tolist()
+
+    # Define the atomic numbers and ionic radii for the substitutional elements
+    atomic_numbers = {
+        'Ca': 20, 'Sr': 38, 'Ba': 56, 'Ce': 58, 
+        'Pr': 59, 'Nd': 60, 'Sm': 62, 'Gd': 64, 
+        'Ti': 22, 'V': 23, 'Cr': 24, 'Mn': 25, 
+        'Fe': 26, 'Ni': 28, 'Cu': 29, 'Zn': 30
+        }
+    ionic_radii = {
+        'Ca': 1.340, 'Sr': 1.440, 'Ba': 1.610, 'Ce': 1.340, 
+        'Pr': 1.179, 'Nd': 1.270, 'Sm': 1.240, 'Gd': 1.107, 
+        'Ti': 0.670, 'V': 0.640, 'Cr': 0.615, 'Mn': 0.645, 
+        'Fe': 0.645, 'Ni': 0.600, 'Cu': 0.540, 'Zn': 0.740
+        }
+    
+    # Get the atomic number and ionic radius based on elements
+    atomic_numbers_list = [atomic_numbers[elem] for elem in elements_]
+    ionic_radii_list = [ionic_radii[elem] for elem in elements_]
+    data_pre['atomic_number_1'] = atomic_numbers_list[0]
+    data_pre['atomic_number_2'] = atomic_numbers_list[1]
+    data_pre['atomic_number_3'] = atomic_numbers_list[2]
+    data_pre['atomic_number_4'] = atomic_numbers_list[3]
+    data_pre['ionic_radius_1'] = ionic_radii_list[0]
+    data_pre['ionic_radius_2'] = ionic_radii_list[1]
+    data_pre['ionic_radius_3'] = ionic_radii_list[2]
+    data_pre['ionic_radius_4'] = ionic_radii_list[3]
+    data_pre['atomic_concentration_1'] = data_pre[elements_[0]]/0.80
+    data_pre['atomic_concentration_2'] = data_pre[elements_[1]]/0.80
+    data_pre['atomic_concentration_3'] = data_pre[elements_[2]]/0.80
+    data_pre['atomic_concentration_4'] = data_pre[elements_[3]]/0.80
+    data_pre['T'] = temperature
 
     return data_pre
-
-
-def ANN_predictor(data_pred_BNN):
-    DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
-    # Load the scaler
-    with open('res/scaler_x_ANN.pkl', 'rb') as f:
-        x_scaler = pickle.load(f)
-    with open('res/scaler_y_ANN.pkl', 'rb') as f:
-        y_scaler = pickle.load(f)
-    
-    # Load the model
-    model = torch.load('res/model_ANN.pkl', weights_only=False)
-    
-    # Get the input data to predict
-    x_pre = data_pred_BNN[['oxygen_vacancy_concentration', 'T', 'F', 'lattice_distortion', 'atomic_distortion']].to_numpy()
-    x_pre = x_scaler.transform(x_pre)
-    x_pre = torch.FloatTensor(x_pre).to(DEVICE)
-   
-    # Predict the data
-    with torch.no_grad():
-        model.eval()
-        y_pre = model(x_pre)
-        y_pre = y_scaler.inverse_transform(y_pre)
-    data_pred_ANN = data_pred_BNN.copy()
-    data_pred_ANN['D'] = y_pre
-
-    return data_pred_ANN
 
 
 def D2C(D, T):
@@ -210,25 +222,62 @@ def D2C(D, T):
     return C
 
 
-def data_display(data):
+def data_display(data_pred):
     data_dis = pd.DataFrame()
-    data_dis['Dopant A'] = data['atomic_number_A'].map({12: 'Mg', 20: 'Ca', 38: 'Sr', 56: 'Ba', 58: 'Ce', 59: 'Pr', 60: 'Nd', 62: 'Sm', 64: 'Gd', 0: 'None'})
-    data_dis['Dopant B'] = data['atomic_number_B'].map({21: 'Sc', 22: 'Ti', 23: 'V', 24: 'Cr', 25: 'Mn', 26: 'Fe', 28: 'Ni', 29: 'Cu', 30: 'Zn', 13: 'Al', 31: 'Ga', 0: 'None'})
-    data_dis['Dopant Concentration A (at.%)'] = (data['dopant_concentration_A'] * 100).round().astype(int)
-    data_dis['Dopant Concentration B (at.%)'] = (data['dopant_concentration_B'] * 100).round().astype(int)
-    data_dis['Oxygen Vacancy Concentration (at.%)'] = data['oxygen_vacancy_concentration'] * 100
-    data_dis['Temperature (K)'] = data['T'].astype(int)
-    data_dis['F (eV/atom)'] = data['F']
-    data_dis['Lattice Distortion (%)'] = data['lattice_distortion'] * 100
-    data_dis['Atomic Distortion (Å)'] = data['atomic_distortion']
-    data_dis['F std (eV/atom)'] = data['F_std']
-    data_dis['Lattice Distortion std (%)'] = data['lattice_distortion_std'] * 100
-    data_dis['Atomic Distortion std (Å)'] = data['atomic_distortion_std']
-    data_dis['D (cm^2/s)'] = data['D']
+    data_dis['concentration_1 (at.%)'] = data_pred['atomic_concentration_1']
+    data_dis['concentration_2 (at.%)'] = data_pred['atomic_concentration_2']
+    data_dis['concentration_3 (at.%)'] = data_pred['atomic_concentration_3']
+    data_dis['concentration_4 (at.%)'] = data_pred['atomic_concentration_4']
+    data_dis['b'] = (data_pred['atomic_concentration_1'] * 0.80).round().astype(int)
+    data_dis['c'] = (data_pred['atomic_concentration_2'] * 0.80).round().astype(int)
+    data_dis['d'] = (data_pred['atomic_concentration_3'] * 0.80).round().astype(int)
+    data_dis['e'] = (data_pred['atomic_concentration_4'] * 0.80).round().astype(int)
+    data_dis['a'] = 80 - data_dis['b'] - data_dis['c'] - data_dis['d'] - data_dis['e']
+    data_dis['Temperature (K)'] = data_pred['T'].astype(int)
+    data_dis['Ef (eV/atom)'] = data_pred['Ef']
+    data_dis['D_lattice (cm^2/s)'] = data_pred['D_lattice']
+    data_dis['D_atomic (cm^2/s)'] = data_pred['D_atomic']
+    data_dis['D (cm^2/s)'] = -data_pred['D_negative']
+    data_dis['Ef std (eV/atom)'] = data_pred['Ef_std']
+    data_dis['D_lattice std (cm^2/s)'] = data_pred['D_lattice_std']
+    data_dis['D_atomic std (cm^2/s)'] = data_pred['D_atomic_std']
+    data_dis['D std (cm^2/s)'] = data_pred['D_negative_std']
     data_dis['C (S/cm)'] = D2C(data_dis['D (cm^2/s)'], data_dis['Temperature (K)'])
-    # Reorder the columns
-    data_dis = data_dis[['Dopant A', 'Dopant Concentration A (at.%)', 'Dopant B', 'Dopant Concentration B (at.%)', 'Oxygen Vacancy Concentration (at.%)', 'Temperature (K)', 'F (eV/atom)', 'Lattice Distortion (%)', 'Atomic Distortion (Å)', 'F std (eV/atom)', 'Lattice Distortion std (%)', 'Atomic Distortion std (Å)', 'D (cm^2/s)', 'C (S/cm)']]
+    data_dis['element_1'] = data_pred.columns[0]
+    data_dis['element_2'] = data_pred.columns[1]
+    data_dis['element_3'] = data_pred.columns[2]
+    data_dis['element_4'] = data_pred.columns[3]
+    data_dis = data_dis[[
+        'element_1', 'concentration_1 (at.%)',
+        'element_2', 'concentration_2 (at.%)', 
+        'element_3', 'concentration_3 (at.%)', 
+        'element_4', 'concentration_4 (at.%)', 
+        'Temperature (K)', 
+        'Ef (eV/atom)', 'D_lattice (cm^2/s)', 'D_atomic (cm^2/s)', 'D (cm^2/s)', 
+        'Ef std (eV/atom)', 'D_lattice std (cm^2/s)', 'D_atomic std (cm^2/s)', 'D std (cm^2/s)', 
+        'C (S/cm)',
+        'a', 'b', 'c', 'd', 'e'
+        ]]
     return data_dis
+
+
+def set_labels_plotly(fig, labels):
+    fig.add_annotation(x=0.82, y=0.94, text=labels[0],
+                       xref="paper", yref="paper",
+                       showarrow=False, font=dict(size=12, color="black"))
+    fig.add_annotation(x=0.04, y=0.84, text=labels[1],
+                       xref="paper", yref="paper",
+                       showarrow=False, font=dict(size=12, color="black"))
+    fig.add_annotation(x=0.92, y=0.35, text=labels[2],
+                       xref="paper", yref="paper",
+                       showarrow=False, font=dict(size=12, color="black"))
+    fig.add_annotation(x=0.02, y=0.20, text=labels[3],
+                       xref="paper", yref="paper",
+                       showarrow=False, font=dict(size=12, color="black"))
+    fig.add_annotation(x=0.54, y=0.02, text=labels[4],
+                       xref="paper", yref="paper",
+                       showarrow=False, font=dict(size=12, color="black"))
+    return fig
 
 
 def main():
@@ -283,73 +332,68 @@ def main():
     st.subheader('Substitutional Elements:')
     if select_site == 'A-site':
         element_pool = ['La', 'Ca', 'Sr', 'Ba', 'Ce', 'Pr', 'Nd', 'Sm', 'Gd']
-        element = st.multiselect(
+        elements = st.multiselect(
             label='Please select five A-site element(s) for substitution:',
             options=element_pool,
             default=['La', 'Ca', 'Sr', 'Ba', 'Ce'],
             max_selections=5,
         )
         # Ensure La is always included
-        if 'La' not in element:
+        if 'La' not in elements:
             st.error("Error: La is mandatory for A-site substitution.")
         # Ensure 5 elements are selected
-        if len(element) != 5:
+        if len(elements) != 5:
             st.error("Error: Please select exactly five elements.")
     else:
         element_pool = ['Co', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Ni', 'Cu', 'Zn']
-        element = st.multiselect(
+        elements = st.multiselect(
             label='Please select five B-site element(s) for substitution:',
             options=element_pool,
             default=['Co', 'Ni', 'Fe', 'Mn', 'Cr'],
             max_selections=5,
         )
         # Ensure Co is always included
-        if 'Co' not in element:
+        if 'Co' not in elements:
             st.error("Error: Co is mandatory for B-site substitution.")
         # Ensure 5 elements are selected
-        if len(element) != 5:
+        if len(elements) != 5:
             st.error("Error: Please select exactly five elements.")
 
     # Add sliders for dopant concentration range selection
     st.subheader('Substitutional Concentrations:')
-    st.caption('The concentration of La (for A-site) or Co (for B-site) will be adjusted to balance the total concentration to 100 at.%.')
+    st.caption('Please select the concentration range (15-40 at.%) for each selected element.')
     concentration_container = st.container(border=True, gap='medium', width='stretch')
+    element_conc = {}
     with concentration_container:
         if select_site == 'A-site':
-            for i, elem in enumerate(element):
-                if elem == 'La':
-                    pass
-                else:
-                    conc = st.slider(
-                        label=f'**{elem}** (at.%):',
-                        min_value=15,
-                        max_value=40,
-                        value=(20, 30),
-                        step=1,
-                        key=f'slider_A_{i}',
-                    )
-                    element[i] = (elem, conc)
+            for i, elem in enumerate(elements):
+                conc = st.slider(
+                    label=f'**{elem}** (at.%):',
+                    min_value=15,
+                    max_value=40,
+                    value=(15, 25),
+                    step=1,
+                    key=f'slider_A_{i}',
+                )
+                element_conc[elem] = conc
         else:
-            for i, elem in enumerate(element):
-                if elem == 'Co':
-                    pass
-                else:
-                    conc = st.slider(
-                        label=f'**{elem}** (at.%):',
-                        min_value=15,
-                        max_value=40,
-                        value=(20, 30),
-                        step=1,
-                        key=f'slider_B_{i}',
-                    )
-                    element[i] = (elem, conc)
+            for i, elem in enumerate(elements):
+                conc = st.slider(
+                    label=f'**{elem}** (at.%):',
+                    min_value=15,
+                    max_value=40,
+                    value=(15, 25),
+                    step=1,
+                    key=f'slider_B_{i}',
+                )
+                element_conc[elem] = conc
 
     # Add a container for system conditions
     st.subheader('System Conditions:')
     st.caption('This only applies to diffusivity and conductivity predictions.')
     temperature_container = st.container(border=True, gap='medium', width='stretch')
-    
-    # Set the 2nd column for temperature
+
+    # Set slider for temperature
     with temperature_container:
         T = st.slider(
             label='Please select the temperature (K):',
@@ -366,10 +410,9 @@ def main():
     # Once the user dopant selection and system conditions changed, reset the session state for showing predicted data and visualization
     input_signature = json.dumps({
         "select_site": select_site,
-        "element_conc": element,
+        "element_conc": element_conc,
         "temperature": T,
     }, sort_keys=True)
-    st.write(f"Input Signature: {input_signature}")  # For debugging purpose only, can be removed later
 
     # Create a hash of the input state
     input_hash = hashlib.md5(input_signature.encode()).hexdigest()
@@ -387,15 +430,15 @@ def main():
     st.divider()
     if st.button('Predict', type='primary', width='stretch'):
         if select_site == 'A-site':
-            if 'La' not in element:
+            if 'La' not in elements:
                 st.error("Error: La is mandatory for A-site substitution.")
                 st.stop()
         else:
-            if 'Co' not in element:
+            if 'Co' not in elements:
                 st.error("Error: Co is mandatory for B-site substitution.")
                 st.stop()
         # Ensure 5 elements are selected
-        if len(element) != 5:
+        if len(elements) != 5:
             st.error("Error: Please select exactly five elements.")
             st.stop()
 
@@ -403,13 +446,11 @@ def main():
         with st.spinner('Predicting... Please wait — this may take a few seconds to a few minutes depending on your input size and complexity.'):
             try:
                 # Get the dopant data
-                data_pre_BNN = get_dopant_data(dopant_A, dopant_B, dopant_A_conc, dopant_B_conc, oxygen_vacancy_concentration, T)
+                data_pre = get_dopant_data(site=select_site, element_conc=element_conc, temperature=T)
                 # Predict the data using BNN
-                data_pred_BNN = BNN_predictor(data_pre_BNN)
-                # Predict the data using ANN
-                data_pred_ANN = ANN_predictor(data_pred_BNN)
+                data_pred = BNN_predictor(site=select_site, data_pre=data_pre)
                 # Process the predicted data for display
-                st.session_state['data_pred_dis'] = data_display(data_pred_ANN)
+                st.session_state['data_pred_dis'] = data_display(data_pred=data_pred)
             except Exception as e:
                 # Clear previous predictions
                 st.session_state['data_pred_dis'] = None
@@ -420,604 +461,147 @@ def main():
     # Show the predicted data
     if st.session_state.get('data_pred_dis') is not None:
         data_dis = st.session_state['data_pred_dis']
+        # Filter the data to show only rows with D > 0
+        data_dis = data_dis[data_dis['D (cm^2/s)'] > 0].reset_index(drop=True)
+        umap_model = joblib.load('res/umap_model.pkl')
+        data_all = joblib.load('res/data_all.pkl')
+        umap_embeddings = umap_model.transform(data_all[['a', 'b', 'c', 'd', 'e']].values)
+        data_dis_embeddings = umap_model.transform(data_dis[['a', 'b', 'c', 'd', 'e']].values)
+        labels = ['La' if select_site == 'A-site' else 'Co', data_dis['element_1'].iloc[0], data_dis['element_2'].iloc[0], data_dis['element_3'].iloc[0], data_dis['element_4'].iloc[0]]
 
-        # Visualize the forming energy
+        # Visualize the forming energy, lattice distortion, atomic distortion, and diffusivity
         st.divider()
-        st.subheader('Energetic Stability:')
-        with st.container(border=True):
-            st.markdown('**Formation Energy (eV/atom):**')
-            # Create a heatmap for F (eV/atom)
-            if dopant_A != 'None' and dopant_B != 'None':
-                heatmap_F = data_dis.pivot_table(index='Dopant Concentration A (at.%)', columns='Dopant Concentration B (at.%)', values='F (eV/atom)')
-                labels=dict(x=f'{dopant_B} (at.%)', y=f'{dopant_A} (at.%)', color='F (eV/atom)')
-            elif dopant_A != 'None' and dopant_B == 'None':
-                heatmap_F = data_dis.pivot_table(index='Dopant Concentration B (at.%)', columns='Dopant Concentration A (at.%)', values='F (eV/atom)')
-                labels=dict(x=f'{dopant_A} (at.%)', y='', color='F (eV/atom)')
-            elif dopant_A == 'None' and dopant_B != 'None':
-                heatmap_F = data_dis.pivot_table(index='Dopant Concentration A (at.%)', columns='Dopant Concentration B (at.%)', values='F (eV/atom)')
-                labels=dict(x=f'{dopant_B} (at.%)', y='', color='F (eV/atom)')
-            # Create the Plotly heatmap
-            fig = px.imshow(
-                heatmap_F,
-                color_continuous_scale='Viridis',
-                labels=labels,
+        col1, col2 = st.columns(2, gap='medium', border=True)
+        col3, col4 = st.columns(2, gap='medium', border=True)
+        # col5, col6 = st.columns(2, gap='medium', border=True)
+        kwargs_data_all = dict(
+            x=umap_embeddings[:, 0],
+            y=umap_embeddings[:, 1],
+            mode="markers",
+            marker=dict(color="lightgrey", size=5, symbol="circle"),
+            name="Compositional Space",
+            opacity=0.5,
+        )
+        kwargs_data_dis = dict(
+            x=data_dis_embeddings[:, 0],
+            y=data_dis_embeddings[:, 1],
+            mode='markers',
+            name='Predicted Compositions',
+        )
+        kwargs_fig = dict(
+            # width=600,
+            # height=600,
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+            legend=dict(
+                orientation='h',
+                yanchor='bottom',
+                y=-0.2,
+                xanchor='center',
+                x=0.5
             )
-            fig.update_coloraxes(
-                colorbar_tickformat='.2f',
-                colorbar_title_text='',
-            )
-            # Display in Streamlit
-            st.plotly_chart(fig, width='stretch')
-        
-        with st.expander('**Formation Energy Trends Across Different Dopant Sites** (Click to Expand)', expanded=False):
-            if dopant_A != 'None' and dopant_B != 'None':
-                # Set 2 columns for A and B site dopant
-                col5, col6 = st.columns(2, border=True, gap='medium')
-                with col5:
-                    # Plot the F (eV/atom) vs B-site dopant concentration
-                    if dopant_A_conc[0] == dopant_A_conc[1]:
-                        dopant_A_conc_filter = dopant_A_conc[0]
-                    else:
-                        dopant_A_conc_filter = st.slider(
-                            label=f'Adjust the Concentration of {dopant_A} (at.%):',
-                            min_value=dopant_A_conc[0],
-                            max_value=dopant_A_conc[1],
-                            value=(dopant_A_conc[0] + dopant_A_conc[1]) // 2,
-                            step=1,
-                            key='dopant_A_conc_filter_for_F_A'
-                        )
-                    data_dis_filter = data_dis[data_dis['Dopant Concentration A (at.%)'] == dopant_A_conc_filter]
-                    fig = px.line(
-                        data_dis_filter,
-                        x='Dopant Concentration B (at.%)',
-                        y='F (eV/atom)',
-                        error_y='F std (eV/atom)',
-                        markers=True,
-                        line_dash_sequence=['dot'],
-                    )
-                    fig.update_layout(
-                        xaxis_title=f'{dopant_B} (at.%)',
-                        yaxis_title='Forming Energy (eV/atom)',
-                        yaxis_tickformat='.2f',
-                    )
-                    st.plotly_chart(fig, width='stretch')
-                
-                with col6:
-                    # Plot the F (eV/atom) vs A-site dopant concentration
-                    if dopant_B_conc[0] == dopant_B_conc[1]:
-                        dopant_B_conc_filter = dopant_B_conc[0]
-                    else:
-                        dopant_B_conc_filter = st.slider(
-                            label=f'Adjust the Concentration of {dopant_B} (at.%):',
-                            min_value=dopant_B_conc[0],
-                            max_value=dopant_B_conc[1],
-                            value=(dopant_B_conc[0] + dopant_B_conc[1]) // 2,
-                            step=1,
-                            key='dopant_B_conc_filter_for_F_B'
-                        )
-                    data_dis_filter = data_dis[data_dis['Dopant Concentration B (at.%)'] == dopant_B_conc_filter]
-                    fig = px.line(
-                        data_dis_filter,
-                        x='Dopant Concentration A (at.%)',
-                        y='F (eV/atom)',
-                        error_y='F std (eV/atom)',
-                        markers=True,
-                        line_dash_sequence=['dot'],
-                    )
-                    fig.update_layout(
-                        xaxis_title=f'{dopant_A} (at.%)',
-                        yaxis_title='Forming Energy (eV/atom)',
-                        yaxis_tickformat='.2f',
-                    )
-                    st.plotly_chart(fig, width='stretch')
-            
-            elif dopant_A != 'None' and dopant_B == 'None':
-                fig = px.line(
-                    data_dis,
-                    x='Dopant Concentration A (at.%)',
-                    y='F (eV/atom)',
-                    error_y='F std (eV/atom)',
-                    markers=True,
-                    line_dash_sequence=['dot'],
-                )
-                fig.update_layout(
-                    xaxis_title=f'{dopant_A} (at.%)',
-                    yaxis_title='Forming Energy (eV/atom)',
-                    yaxis_tickformat='.2f',
-                )
-                st.plotly_chart(fig, width='stretch')
-            
-            elif dopant_A == 'None' and dopant_B != 'None':
-                fig = px.line(
-                    data_dis,
-                    x='Dopant Concentration B (at.%)',
-                    y='F (eV/atom)',
-                    error_y='F std (eV/atom)',
-                    markers=True,
-                    line_dash_sequence=['dot'],
-                )
-                fig.update_layout(
-                    xaxis_title=f'{dopant_B} (at.%)',
-                    yaxis_title='Forming Energy (eV/atom)',
-                    yaxis_tickformat='.2f',
-                )
-                st.plotly_chart(fig, width='stretch')
+        )
 
-        # Visualize the lattice distortion and atomic distortion
-        st.divider()
-        st.subheader('Structural Distortions:')
-        col7, col8 = st.columns(2, border=True, gap='medium')
-        with col7:
-            st.markdown('**Lattice Distortion (%):**')
-            # Create a heatmap for lattice distortion
-            if dopant_A != 'None' and dopant_B != 'None':
-                heatmap_lattice = data_dis.pivot_table(index='Dopant Concentration A (at.%)', columns='Dopant Concentration B (at.%)', values='Lattice Distortion (%)')
-                labels=dict(x=f'{dopant_B} (at.%)', y=f'{dopant_A} (at.%)', color='Lattice Distortion (%)')
-            elif dopant_A != 'None' and dopant_B == 'None':
-                heatmap_lattice = data_dis.pivot_table(index='Dopant Concentration B (at.%)', columns='Dopant Concentration A (at.%)', values='Lattice Distortion (%)')
-                labels=dict(x=f'{dopant_A} (at.%)', y='', color='Lattice Distortion (%)')
-            elif dopant_A == 'None' and dopant_B != 'None':
-                heatmap_lattice = data_dis.pivot_table(index='Dopant Concentration A (at.%)', columns='Dopant Concentration B (at.%)', values='Lattice Distortion (%)')
-                labels=dict(x=f'{dopant_B} (at.%)', y='', color='Lattice Distortion (%)')
-            # Create the Plotly heatmap
-            fig = px.imshow(
-                heatmap_lattice,
-                color_continuous_scale='Viridis',
-                labels=labels,
-            )
-            fig.update_coloraxes(
-                colorbar_tickformat='.2f',
-                colorbar_title_text='',
-            )
-            # Display in Streamlit
-            st.plotly_chart(fig, width='stretch')
-        
-        with col8:
-            st.markdown('**Atomic Distortion (Å):**')
-            # Create a heatmap for atomic distortion
-            if dopant_A != 'None' and dopant_B != 'None':
-                heatmap_atomic = data_dis.pivot_table(index='Dopant Concentration A (at.%)', columns='Dopant Concentration B (at.%)', values='Atomic Distortion (Å)')
-                labels=dict(x=f'{dopant_B} (at.%)', y=f'{dopant_A} (at.%)', color='Atomic Distortion (Å)')
-            elif dopant_A != 'None' and dopant_B == 'None':
-                heatmap_atomic = data_dis.pivot_table(index='Dopant Concentration B (at.%)', columns='Dopant Concentration A (at.%)', values='Atomic Distortion (Å)')
-                labels=dict(x=f'{dopant_A} (at.%)', y='', color='Atomic Distortion (Å)')
-            elif dopant_A == 'None' and dopant_B != 'None':
-                heatmap_atomic = data_dis.pivot_table(index='Dopant Concentration A (at.%)', columns='Dopant Concentration B (at.%)', values='Atomic Distortion (Å)')
-                labels=dict(x=f'{dopant_B} (at.%)', y='', color='Atomic Distortion (Å)')
-            # Create the Plotly heatmap
-            fig = px.imshow(
-                heatmap_atomic,
-                color_continuous_scale='Viridis',
-                labels=labels,
-            )
-            fig.update_coloraxes(
-                colorbar_tickformat='.2f',
-                colorbar_title_text='',
-            )
-            # Display in Streamlit
-            st.plotly_chart(fig, width='stretch')
-        
-        with st.expander('**Lattice Distortion Trends Across Different Dopant Sites** (Click to Expand)', expanded=False):
-            if dopant_A != 'None' and dopant_B != 'None':
-                # Set 2 columns for A and B site dopant
-                col9, col10 = st.columns(2, border=True, gap='medium')
-                with col9:
-                    # Plot the lattice distortion vs B-site dopant concentration
-                    if dopant_A_conc[0] == dopant_A_conc[1]:
-                        dopant_A_conc_filter = dopant_A_conc[0]
-                    else:
-                        dopant_A_conc_filter = st.slider(
-                            label=f'Adjust the Concentration of {dopant_A} (at.%):',
-                            min_value=dopant_A_conc[0],
-                            max_value=dopant_A_conc[1],
-                            value=(dopant_A_conc[0] + dopant_A_conc[1]) // 2,
-                            step=1,
-                            key='dopant_A_conc_filter_for_lattice_A'
-                        )
-                    data_dis_filter = data_dis[data_dis['Dopant Concentration A (at.%)'] == dopant_A_conc_filter]
-                    fig = px.line(
-                        data_dis_filter,
-                        x='Dopant Concentration B (at.%)',
-                        y='Lattice Distortion (%)',
-                        error_y='Lattice Distortion std (%)',
-                        markers=True,
-                        line_dash_sequence=['dot'],
-                    )
-                    fig.update_layout(
-                        xaxis_title=f'{dopant_B} (at.%)',
-                        yaxis_title='Lattice Distortion (%)',
-                        yaxis_tickformat='.2f',
-                    )
-                    st.plotly_chart(fig, width='stretch')
-                
-                with col10:
-                    # Plot the lattice distortion vs A-site dopant concentration
-                    if dopant_B_conc[0] == dopant_B_conc[1]:
-                        dopant_B_conc_filter = dopant_B_conc[0]
-                    else:
-                        dopant_B_conc_filter = st.slider(
-                            label=f'Adjust the Concentration of {dopant_B} (at.%):',
-                            min_value=dopant_B_conc[0],
-                            max_value=dopant_B_conc[1],
-                            value=(dopant_B_conc[0] + dopant_B_conc[1]) // 2,
-                            step=1,
-                            key='dopant_B_conc_filter_for_lattice_B'
-                        )
-                    data_dis_filter = data_dis[data_dis['Dopant Concentration B (at.%)'] == dopant_B_conc_filter]
-                    fig = px.line(
-                        data_dis_filter,
-                        x='Dopant Concentration A (at.%)',
-                        y='Lattice Distortion (%)',
-                        error_y='Lattice Distortion std (%)',
-                        markers=True,
-                        line_dash_sequence=['dot'],
-                    )
-                    fig.update_layout(
-                        xaxis_title=f'{dopant_A} (at.%)',
-                        yaxis_title='Lattice Distortion (%)',
-                        yaxis_tickformat='.2f',
-                    )
-                    st.plotly_chart(fig, width='stretch')
-            
-            elif dopant_A != 'None' and dopant_B == 'None':
-                fig = px.line(
-                    data_dis,
-                    x='Dopant Concentration A (at.%)',
-                    y='Lattice Distortion (%)',
-                    error_y='Lattice Distortion std (%)',
-                    markers=True,
-                    line_dash_sequence=['dot'],
+        # Formation Energy
+        with col1:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(**kwargs_data_all))
+            fig.add_trace(
+                go.Scatter(
+                    **kwargs_data_dis,
+                    marker=dict(
+                        color=data_dis['Ef (eV/atom)'],
+                        colorscale='Viridis',
+                        size=5,
+                        symbol='circle',
+                        colorbar=dict(title='E<sub>f</sub> (eV/atom)'),
+                    ),
                 )
-                fig.update_layout(
-                    xaxis_title=f'{dopant_A} (at.%)',
-                    yaxis_title='Lattice Distortion (%)',
-                    yaxis_tickformat='.2f',
-                )
-                st.plotly_chart(fig, width='stretch')
-            
-            elif dopant_A == 'None' and dopant_B != 'None':
-                fig = px.line(
-                    data_dis,
-                    x='Dopant Concentration B (at.%)',
-                    y='Lattice Distortion (%)',
-                    error_y='Lattice Distortion std (%)',
-                    markers=True,
-                    line_dash_sequence=['dot'],
-                )
-                fig.update_layout(
-                    xaxis_title=f'{dopant_B} (at.%)',
-                    yaxis_title='Lattice Distortion (%)',
-                    yaxis_tickformat='.2f',
-                )
-                st.plotly_chart(fig, width='stretch')
+            )
+            # Add labels for the five elements
+            fig = set_labels_plotly(fig, labels)
+            fig.update_layout(
+                title='UMAP Projection of Predicted Formation Energy:',
+                **kwargs_fig
+            )
+            st.plotly_chart(fig, use_container_width=False)
 
-        with st.expander('**Atomic Distortion Trends Across Different Dopant Sites** (Click to Expand)', expanded=False):
-            if dopant_A != 'None' and dopant_B != 'None':
-                # Set 2 columns for A and B site dopant
-                col11, col12 = st.columns(2, border=True, gap='medium')
-                with col11:
-                    # Plot the atomic distortion vs B-site dopant concentration
-                    if dopant_A_conc[0] == dopant_A_conc[1]:
-                        dopant_A_conc_filter = dopant_A_conc[0]
-                    else:   
-                        dopant_A_conc_filter = st.slider(
-                            label=f'Adjust the Concentration of {dopant_A} (at.%):',
-                            min_value=dopant_A_conc[0],
-                            max_value=dopant_A_conc[1],
-                            value=(dopant_A_conc[0] + dopant_A_conc[1]) // 2,
-                            step=1,
-                            key='dopant_A_conc_filter_for_atomic_A'
-                        )
-                    data_dis_filter = data_dis[data_dis['Dopant Concentration A (at.%)'] == dopant_A_conc_filter]
-                    fig = px.line(
-                        data_dis_filter,
-                        x='Dopant Concentration B (at.%)',
-                        y='Atomic Distortion (Å)',
-                        error_y='Atomic Distortion std (Å)',
-                        markers=True,
-                        line_dash_sequence=['dot'],
-                    )
-                    fig.update_layout(
-                        xaxis_title=f'{dopant_B} (at.%)',
-                        yaxis_title='Atomic Distortion (Å)',
-                        yaxis_tickformat='.2f',
-                    )
-                    st.plotly_chart(fig, width='stretch')
-                
-                with col12:
-                    # Plot the atomic distortion vs A-site dopant concentration
-                    if dopant_B_conc[0] == dopant_B_conc[1]:
-                        dopant_B_conc_filter = dopant_B_conc[0]
-                    else:
-                        dopant_B_conc_filter = st.slider(
-                            label=f'Adjust the Concentration of {dopant_B} (at.%):',
-                            min_value=dopant_B_conc[0],
-                            max_value=dopant_B_conc[1],
-                            value=(dopant_B_conc[0] + dopant_B_conc[1]) // 2,
-                            step=1,
-                            key='dopant_B_conc_filter_for_atomic_B'
-                        )
-                    data_dis_filter = data_dis[data_dis['Dopant Concentration B (at.%)'] == dopant_B_conc_filter]
-                    fig = px.line(
-                        data_dis_filter,
-                        x='Dopant Concentration A (at.%)',
-                        y='Atomic Distortion (Å)',
-                        error_y='Atomic Distortion std (Å)',
-                        markers=True,
-                        line_dash_sequence=['dot'],
-                    )
-                    fig.update_layout(
-                        xaxis_title=f'{dopant_A} (at.%)',
-                        yaxis_title='Atomic Distortion (Å)',
-                        yaxis_tickformat='.2f',
-                    )
-                    st.plotly_chart(fig, width='stretch')
-
-            elif dopant_A != 'None' and dopant_B == 'None':
-                fig = px.line(
-                    data_dis,
-                    x='Dopant Concentration A (at.%)',
-                    y='Atomic Distortion (Å)',
-                    error_y='Atomic Distortion std (Å)',
-                    markers=True,
-                    line_dash_sequence=['dot'],
+        # Lattice Distortion
+        with col2:
+            fig = go.Figure()
+            fig.add_trace(
+                go.Scatter(**kwargs_data_all))
+            fig.add_trace(
+                go.Scatter(
+                    **kwargs_data_dis,
+                    marker=dict(
+                        color=data_dis['D_lattice (cm^2/s)'],
+                        colorscale='Viridis',
+                        size=5,
+                        symbol='circle',
+                        colorbar=dict(title=r'Δ<sub>lattice</sub> (cm²/s)'),
+                    ),
                 )
-                fig.update_layout(
-                    xaxis_title=f'{dopant_A} (at.%)',
-                    yaxis_title='Atomic Distortion (Å)',
-                    yaxis_tickformat='.2f',
-                )
-                st.plotly_chart(fig, width='stretch')
-
-            elif dopant_A == 'None' and dopant_B != 'None':
-                fig = px.line(
-                    data_dis,
-                    x='Dopant Concentration B (at.%)',
-                    y='Atomic Distortion (Å)',
-                    error_y='Atomic Distortion std (Å)',
-                    markers=True,
-                    line_dash_sequence=['dot'],
-                )
-                fig.update_layout(
-                    xaxis_title=f'{dopant_B} (at.%)',
-                    yaxis_title='Atomic Distortion (Å)',
-                    yaxis_tickformat='.2f',
-                )
-                st.plotly_chart(fig, width='stretch')
-
-        # Visualize the diffusion coefficient
-        st.divider()
-        st.subheader('Diffusivity & Conductivity:')
-        col13, col14 = st.columns(2, border=True, gap='medium')
-        with col13:
-            st.markdown('**Diffusion Coefficient (cm<sup>2</sup>/s):**', unsafe_allow_html=True)
-            # Create a heatmap for D (cm^2/s)
-            if dopant_A != 'None' and dopant_B != 'None':
-                heatmap_D = data_dis.pivot_table(index='Dopant Concentration A (at.%)', columns='Dopant Concentration B (at.%)', values='D (cm^2/s)')
-                labels=dict(x=f'{dopant_B} (at.%)', y=f'{dopant_A} (at.%)', color='D (cm^2/s)')
-            elif dopant_A != 'None' and dopant_B == 'None':
-                heatmap_D = data_dis.pivot_table(index='Dopant Concentration B (at.%)', columns='Dopant Concentration A (at.%)', values='D (cm^2/s)')
-                labels=dict(x=f'{dopant_A} (at.%)', y='', color='D (cm^2/s)')
-            elif dopant_A == 'None' and dopant_B != 'None':
-                heatmap_D = data_dis.pivot_table(index='Dopant Concentration A (at.%)', columns='Dopant Concentration B (at.%)', values='D (cm^2/s)')
-                labels=dict(x=f'{dopant_B} (at.%)', y='', color='D (cm^2/s)')
-            # Create the Plotly heatmap
-            fig = px.imshow(
-                heatmap_D,
-                color_continuous_scale='Viridis',
-                labels=labels,
             )
-            fig.update_coloraxes(
-                colorbar_tickformat='.2e',
-                colorbar_title_text='',
+            # Add labels for the five elements
+            fig = set_labels_plotly(fig, labels)
+            fig.update_layout(
+                title='UMAP Projection of Predicted Lattice Distortion:',
+                **kwargs_fig
             )
-            # Display in Streamlit
-            st.plotly_chart(fig, width='stretch')
-        with col14:
-            st.markdown('**Ionic Conductivity (S/cm):**')
-            # Create a heatmap for C (S/cm)
-            if dopant_A != 'None' and dopant_B != 'None':
-                heatmap_C = data_dis.pivot_table(index='Dopant Concentration A (at.%)', columns='Dopant Concentration B (at.%)', values='C (S/cm)')
-                labels=dict(x=f'{dopant_B} (at.%)', y=f'{dopant_A} (at.%)', color='C (S/cm)')
-            elif dopant_A != 'None' and dopant_B == 'None':
-                heatmap_C = data_dis.pivot_table(index='Dopant Concentration B (at.%)', columns='Dopant Concentration A (at.%)', values='C (S/cm)')
-                labels=dict(x=f'{dopant_A} (at.%)', y='', color='C (S/cm)')
-            elif dopant_A == 'None' and dopant_B != 'None':
-                heatmap_C = data_dis.pivot_table(index='Dopant Concentration A (at.%)', columns='Dopant Concentration B (at.%)', values='C (S/cm)')
-                labels=dict(x=f'{dopant_B} (at.%)', y='', color='C (S/cm)')
-            # Create the Plotly heatmap
-            fig = px.imshow(
-                heatmap_C,
-                color_continuous_scale='Viridis',
-                labels=labels,
-            )
-            fig.update_coloraxes(
-                colorbar_tickformat='.2e',
-                colorbar_title_text='',
-            )
-            # Display in Streamlit
-            st.plotly_chart(fig, width='stretch')
-        
-        with st.expander('**Diffusion Coefficient Trends Across Different Dopant Sites** (Click to Expand)', expanded=False):
-            if dopant_A != 'None' and dopant_B != 'None':
-                # Set 2 columns for A and B site dopant
-                col15, col16 = st.columns(2, border=True, gap='medium')
-                with col15:
-                    # Plot the D (cm^2/s) vs B-site dopant concentration
-                    if dopant_A_conc[0] == dopant_A_conc[1]:
-                        dopant_A_conc_filter = dopant_A_conc[0]
-                    else:
-                        dopant_A_conc_filter = st.slider(
-                            label=f'Adjust the Concentration of {dopant_A} (at.%):',
-                            min_value=dopant_A_conc[0],
-                            max_value=dopant_A_conc[1],
-                            value=(dopant_A_conc[0] + dopant_A_conc[1]) // 2,
-                            step=1,
-                            key='dopant_A_conc_filter_for_D_A'
-                        )
-                    data_dis_filter = data_dis[data_dis['Dopant Concentration A (at.%)'] == dopant_A_conc_filter]
-                    fig = px.line(
-                        data_dis_filter,
-                        x='Dopant Concentration B (at.%)',
-                        y='D (cm^2/s)',
-                        markers=True,
-                        line_dash_sequence=['dot'],
-                    )
-                    fig.update_layout(
-                        xaxis_title=f'{dopant_B} (at.%)',
-                        yaxis_title='Diffusion Coefficient (cm<sup>2</sup>/s)',
-                        yaxis_tickformat='.2e',
-                    )
-                    st.plotly_chart(fig, width='stretch')
-                
-                with col16:
-                    # Plot the D (cm^2/s) vs A-site dopant concentration
-                    if dopant_B_conc[0] == dopant_B_conc[1]:
-                        dopant_B_conc_filter = dopant_B_conc[0]
-                    else:
-                        dopant_B_conc_filter = st.slider(
-                            label=f'Adjust the Concentration of {dopant_B} (at.%):',
-                            min_value=dopant_B_conc[0],
-                            max_value=dopant_B_conc[1],
-                            value=(dopant_B_conc[0] + dopant_B_conc[1]) // 2,
-                            step=1,
-                            key='dopant_B_conc_filter_for_D_B'
-                        )
-                    data_dis_filter = data_dis[data_dis['Dopant Concentration B (at.%)'] == dopant_B_conc_filter]
-                    fig = px.line(
-                        data_dis_filter,
-                        x='Dopant Concentration A (at.%)',
-                        y='D (cm^2/s)',
-                        markers=True,
-                        line_dash_sequence=['dot'],
-                    )
-                    fig.update_layout(
-                        xaxis_title=f'{dopant_A} (at.%)',
-                        yaxis_title='Diffusion Coefficient (cm<sup>2</sup>/s)',
-                        yaxis_tickformat='.2e',
-                    )
-                    st.plotly_chart(fig, width='stretch')
-            
-            elif dopant_A != 'None' and dopant_B == 'None':
-                fig = px.line(
-                    data_dis,
-                    x='Dopant Concentration A (at.%)',
-                    y='D (cm^2/s)',
-                    markers=True,
-                    line_dash_sequence=['dot'],
-                )
-                fig.update_layout(
-                    xaxis_title=f'{dopant_A} (at.%)',
-                    yaxis_title='Diffusion Coefficient (cm<sup>2</sup>/s)',
-                    yaxis_tickformat='.2e',
-                )
-                st.plotly_chart(fig, width='stretch')
-            
-            elif dopant_A == 'None' and dopant_B != 'None':
-                fig = px.line(
-                    data_dis,
-                    x='Dopant Concentration B (at.%)',
-                    y='D (cm^2/s)',
-                    markers=True,
-                    line_dash_sequence=['dot'],
-                )
-                fig.update_layout(
-                    xaxis_title=f'{dopant_B} (at.%)',
-                    yaxis_title='Diffusion Coefficient (cm<sup>2</sup>/s)',
-                    yaxis_tickformat='.2e',
-                )
-                st.plotly_chart(fig, width='stretch')
+            st.plotly_chart(fig, use_container_width=False)
 
-        # Visualize the ionic conductivity  
-        with st.expander('**Ionic Conductivity Trends Across Different Dopant Sites** (Click to Expand)', expanded=False):
-            if dopant_A != 'None' and dopant_B != 'None':
-                # Set 2 columns for A and B site dopant
-                col17, col18 = st.columns(2, border=True, gap='medium')
-                with col17:
-                    # Plot the C (S/cm) vs B-site dopant concentration
-                    if dopant_A_conc[0] == dopant_A_conc[1]:
-                        dopant_A_conc_filter = dopant_A_conc[0]
-                    else:
-                        dopant_A_conc_filter = st.slider(
-                            label=f'Adjust the Concentration of {dopant_A} (at.%):',
-                            min_value=dopant_A_conc[0],
-                            max_value=dopant_A_conc[1],
-                            value=(dopant_A_conc[0] + dopant_A_conc[1]) // 2,
-                            step=1,
-                            key='dopant_A_conc_filter_for_C_A'
-                        )
-                    data_dis_filter = data_dis[data_dis['Dopant Concentration A (at.%)'] == dopant_A_conc_filter]
-                    fig = px.line(
-                        data_dis_filter,
-                        x='Dopant Concentration B (at.%)',
-                        y='C (S/cm)',
-                        markers=True,
-                        line_dash_sequence=['dot'],
-                    )
-                    fig.update_layout(
-                        xaxis_title=f'{dopant_B} (at.%)',
-                        yaxis_title='Ionic Conductivity (S/cm)',
-                        yaxis_tickformat='.2e',
-                    )
-                    st.plotly_chart(fig, width='stretch')
-                
-                with col18:
-                    # Plot the C (S/cm) vs A-site dopant concentration
-                    if dopant_B_conc[0] == dopant_B_conc[1]:
-                        dopant_B_conc_filter = dopant_B_conc[0]
-                    else:
-                        dopant_B_conc_filter = st.slider(
-                            label=f'Adjust the Concentration of {dopant_B} (at.%):',
-                            min_value=dopant_B_conc[0],
-                            max_value=dopant_B_conc[1],
-                            value=(dopant_B_conc[0] + dopant_B_conc[1]) // 2,
-                            step=1,
-                            key='dopant_B_conc_filter_for_C_B'
-                        )
-                    data_dis_filter = data_dis[data_dis['Dopant Concentration B (at.%)'] == dopant_B_conc_filter]
-                    fig = px.line(
-                        data_dis_filter,
-                        x='Dopant Concentration A (at.%)',
-                        y='C (S/cm)',
-                        markers=True,
-                        line_dash_sequence=['dot'],
-                    )
-                    fig.update_layout(
-                        xaxis_title=f'{dopant_A} (at.%)',
-                        yaxis_title='Ionic Conductivity (S/cm)',
-                        yaxis_tickformat='.2e',
-                    )
-                    st.plotly_chart(fig, width='stretch')
-            
-            elif dopant_A != 'None' and dopant_B == 'None':
-                fig = px.line(
-                    data_dis,
-                    x='Dopant Concentration A (at.%)',
-                    y='C (S/cm)',
-                    markers=True,
-                    line_dash_sequence=['dot'],
+        # Atomic Distortion
+        with col3:
+            fig = go.Figure()
+            fig.add_trace(
+                go.Scatter(**kwargs_data_all))
+            fig.add_trace(
+                go.Scatter(
+                    **kwargs_data_dis,
+                    marker=dict(
+                        color=data_dis['D_atomic (cm^2/s)'],
+                        colorscale='Viridis',
+                        size=5,
+                        symbol='circle',
+                        colorbar=dict(title='Δ<sub>atomic</sub> (cm²/s)'),
+                    ),
                 )
-                fig.update_layout(
-                    xaxis_title=f'{dopant_A} (at.%)',
-                    yaxis_title='Ionic Conductivity (S/cm)',
-                    yaxis_tickformat='.2e',
-                )
-                st.plotly_chart(fig, width='stretch')
+            )
+            # Add labels for the five elements
+            fig = set_labels_plotly(fig, labels)
+            fig.update_layout(
+                title='UMAP Projection of Predicted Atomic Distortion:',
+                **kwargs_fig
+            )
+            st.plotly_chart(fig, use_container_width=False)
 
-            elif dopant_A == 'None' and dopant_B != 'None':
-                fig = px.line(
-                    data_dis,
-                    x='Dopant Concentration B (at.%)',
-                    y='C (S/cm)',
-                    markers=True,
-                    line_dash_sequence=['dot'],
+        # Diffusivity
+        with col4:
+            fig = go.Figure()
+            fig.add_trace(
+                go.Scatter(**kwargs_data_all))
+            fig.add_trace(
+                go.Scatter(
+                    **kwargs_data_dis,
+                    marker=dict(
+                        color=data_dis['D (cm^2/s)'],
+                        colorscale='Viridis',
+                        size=5,
+                        symbol='circle',
+                        colorbar=dict(title='D (cm²/s)'),
+                    ),
                 )
-                fig.update_layout(
-                    xaxis_title=f'{dopant_B} (at.%)',
-                    yaxis_title='Ionic Conductivity (S/cm)',
-                    yaxis_tickformat='.2e',
-                )
-                st.plotly_chart(fig, width='stretch')
+            )
+            # Add labels for the five elements
+            fig = set_labels_plotly(fig, labels)
+            fig.update_layout(
+                title='UMAP Projection of Predicted Diffusion Coefficient:',
+                **kwargs_fig
+            )
+            st.plotly_chart(fig, use_container_width=False)
+    
+
 
     # Add a footer
     st.divider()
@@ -1032,4 +616,5 @@ def main():
 
 
 if __name__ == '__main__':
+
     main()
