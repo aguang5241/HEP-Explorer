@@ -35,7 +35,7 @@ If you use this code in your research, please cite our paper:
 
 ```
 @article{
-  title={Unraveling Doping Effects in LaCoO3 via Machine Learning-Accelerated First-Principles Simulations},
+  title={Substitutional Effects at A- and B-Sites in High-Entropy ABO3 Perovskites: Insights from Machine Learning-Accelerated Simulations and Active Learning},
   author={G. Liu and S. Yang and Y. Zhong},
   journal={},
   volume={},
