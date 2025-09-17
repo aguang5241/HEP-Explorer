@@ -1,0 +1,9 @@
+streamlit
+numpy
+pandas
+matplotlib
+plotly
+torch
+pyro-ppl
+scikit-learn
+umap-learn

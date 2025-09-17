@@ -445,12 +445,26 @@ def main():
         # Show a loading spinner
         with st.spinner('Predicting... Please wait — this may take a few seconds to a few minutes depending on your input size and complexity.'):
             try:
-                # Get the dopant data
-                data_pre = get_dopant_data(site=select_site, element_conc=element_conc, temperature=T)
                 # Predict the data using BNN
+                data_pre = get_dopant_data(site=select_site, element_conc=element_conc, temperature=T)
                 data_pred = BNN_predictor(site=select_site, data_pre=data_pre)
+                st.success('Prediction complete! Running the UMAP transformation...')
+                
                 # Process the predicted data for display
                 st.session_state['data_pred_dis'] = data_display(data_pred=data_pred)
+                data_dis = st.session_state['data_pred_dis']
+                data_dis = data_dis[data_dis['D (cm^2/s)'] > 0].reset_index(drop=True)
+                umap_model = joblib.load('res/umap_model.pkl')
+                data_all = joblib.load('res/data_all.pkl')
+                labels = [
+                    'La' if select_site == 'A-site' else 'Co', 
+                    data_dis['element_1'].iloc[0], 
+                    data_dis['element_2'].iloc[0], 
+                    data_dis['element_3'].iloc[0], 
+                    data_dis['element_4'].iloc[0]
+                    ]
+                umap_embeddings = umap_model.transform(data_all[['a', 'b', 'c', 'd', 'e']].values)
+                data_dis_embeddings = umap_model.transform(data_dis[['a', 'b', 'c', 'd', 'e']].values)
             except Exception as e:
                 # Clear previous predictions
                 st.session_state['data_pred_dis'] = None
@@ -458,148 +472,154 @@ def main():
                 st.error('😢 Sorry, something unexpected happened. Please try again.')
                 st.stop()
     
-    # Show the predicted data
-    if st.session_state.get('data_pred_dis') is not None:
-        data_dis = st.session_state['data_pred_dis']
-        # Filter the data to show only rows with D > 0
-        data_dis = data_dis[data_dis['D (cm^2/s)'] > 0].reset_index(drop=True)
-        umap_model = joblib.load('res/umap_model.pkl')
-        data_all = joblib.load('res/data_all.pkl')
-        umap_embeddings = umap_model.transform(data_all[['a', 'b', 'c', 'd', 'e']].values)
-        data_dis_embeddings = umap_model.transform(data_dis[['a', 'b', 'c', 'd', 'e']].values)
-        labels = ['La' if select_site == 'A-site' else 'Co', data_dis['element_1'].iloc[0], data_dis['element_2'].iloc[0], data_dis['element_3'].iloc[0], data_dis['element_4'].iloc[0]]
-
-        # Visualize the forming energy, lattice distortion, atomic distortion, and diffusivity
-        st.divider()
-        col1, col2 = st.columns(2, gap='medium', border=True)
-        col3, col4 = st.columns(2, gap='medium', border=True)
-        # col5, col6 = st.columns(2, gap='medium', border=True)
-        kwargs_data_all = dict(
-            x=umap_embeddings[:, 0],
-            y=umap_embeddings[:, 1],
-            mode="markers",
-            marker=dict(color="lightgrey", size=5, symbol="circle"),
-            name="Compositional Space",
-            opacity=0.5,
-        )
-        kwargs_data_dis = dict(
-            x=data_dis_embeddings[:, 0],
-            y=data_dis_embeddings[:, 1],
-            mode='markers',
-            name='Predicted Compositions',
-        )
-        kwargs_fig = dict(
-            # width=600,
-            # height=600,
-            xaxis=dict(visible=False),
-            yaxis=dict(visible=False),
-            legend=dict(
-                orientation='h',
-                yanchor='bottom',
-                y=-0.2,
-                xanchor='center',
-                x=0.5
+        # Show the predicted data
+        if st.session_state.get('data_pred_dis') is not None:
+            st.success("UMAP transformation complete!")
+            # Visualize the forming energy, lattice distortion, atomic distortion, and diffusivity
+            st.divider()
+            col1, col2 = st.columns(2, gap='medium', border=True)
+            col3, col4 = st.columns(2, gap='medium', border=True)
+            # col5, col6 = st.columns(2, gap='medium', border=True)
+            hover_text = [
+                f"{row['element_1']}: {row['concentration_1 (at.%)']} at.%<br>"
+                f"{row['element_2']}: {row['concentration_2 (at.%)']} at.%<br>"
+                f"{row['element_3']}: {row['concentration_3 (at.%)']} at.%<br>"
+                f"{row['element_4']}: {row['concentration_4 (at.%)']} at.%"
+                for _, row in data_dis.iterrows()
+            ]
+            kwargs_data_all = dict(
+                x=umap_embeddings[:, 0],
+                y=umap_embeddings[:, 1],
+                mode="markers",
+                marker=dict(color="lightgrey", size=5, symbol="circle"),
+                name="Compositional Space",
+                opacity=0.5,
+                hoverinfo='skip',
             )
-        )
+            kwargs_data_dis = dict(
+                x=data_dis_embeddings[:, 0],
+                y=data_dis_embeddings[:, 1],
+                mode='markers',
+                name='Predicted Compositions',
+                text=hover_text,
+                hoverinfo='text',
+            )
+            kwargs_fig = dict(
+                height=500,
+                width=500,
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False),
+                legend=dict(
+                    orientation='h',
+                    yanchor='bottom',
+                    y=-0.2,
+                    xanchor='center',
+                    x=0.5
+                ),
+            )
 
-        # Formation Energy
-        with col1:
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(**kwargs_data_all))
-            fig.add_trace(
-                go.Scatter(
-                    **kwargs_data_dis,
-                    marker=dict(
-                        color=data_dis['Ef (eV/atom)'],
-                        colorscale='Viridis',
-                        size=5,
-                        symbol='circle',
-                        colorbar=dict(title='E<sub>f</sub> (eV/atom)'),
-                    ),
+            # Formation Energy
+            with col1:
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(**kwargs_data_all))
+                fig.add_trace(
+                    go.Scatter(
+                        **kwargs_data_dis,
+                        marker=dict(
+                            color=data_dis['Ef (eV/atom)'],
+                            colorscale='Viridis',
+                            opacity=0.8,
+                            size=5,
+                            symbol='circle',
+                            colorbar=dict(title='E<sub>f</sub> (eV/atom)'),
+                        ),
+                    )
                 )
-            )
-            # Add labels for the five elements
-            fig = set_labels_plotly(fig, labels)
-            fig.update_layout(
-                title='UMAP Projection of Predicted Formation Energy:',
-                **kwargs_fig
-            )
-            st.plotly_chart(fig, use_container_width=False)
-
-        # Lattice Distortion
-        with col2:
-            fig = go.Figure()
-            fig.add_trace(
-                go.Scatter(**kwargs_data_all))
-            fig.add_trace(
-                go.Scatter(
-                    **kwargs_data_dis,
-                    marker=dict(
-                        color=data_dis['D_lattice (cm^2/s)'],
-                        colorscale='Viridis',
-                        size=5,
-                        symbol='circle',
-                        colorbar=dict(title=r'Δ<sub>lattice</sub> (cm²/s)'),
-                    ),
+                # Add labels for the five elements
+                fig = set_labels_plotly(fig, labels)
+                fig.update_layout(
+                    title='UMAP Projection of Predicted Formation Energy:',
+                    **kwargs_fig
                 )
-            )
-            # Add labels for the five elements
-            fig = set_labels_plotly(fig, labels)
-            fig.update_layout(
-                title='UMAP Projection of Predicted Lattice Distortion:',
-                **kwargs_fig
-            )
-            st.plotly_chart(fig, use_container_width=False)
+                st.plotly_chart(fig, use_container_width=False)
 
-        # Atomic Distortion
-        with col3:
-            fig = go.Figure()
-            fig.add_trace(
-                go.Scatter(**kwargs_data_all))
-            fig.add_trace(
-                go.Scatter(
-                    **kwargs_data_dis,
-                    marker=dict(
-                        color=data_dis['D_atomic (cm^2/s)'],
-                        colorscale='Viridis',
-                        size=5,
-                        symbol='circle',
-                        colorbar=dict(title='Δ<sub>atomic</sub> (cm²/s)'),
-                    ),
+            # Lattice Distortion
+            with col2:
+                fig = go.Figure()
+                fig.add_trace(
+                    go.Scatter(**kwargs_data_all))
+                fig.add_trace(
+                    go.Scatter(
+                        **kwargs_data_dis,
+                        marker=dict(
+                            color=data_dis['D_lattice (cm^2/s)'],
+                            colorscale='Viridis',
+                            opacity=0.8,
+                            size=5,
+                            symbol='circle',
+                            colorbar=dict(title=r'Δ<sub>lattice</sub> (cm²/s)'),
+                        ),
+                    )
                 )
-            )
-            # Add labels for the five elements
-            fig = set_labels_plotly(fig, labels)
-            fig.update_layout(
-                title='UMAP Projection of Predicted Atomic Distortion:',
-                **kwargs_fig
-            )
-            st.plotly_chart(fig, use_container_width=False)
+                # Add labels for the five elements
+                fig = set_labels_plotly(fig, labels)
+                fig.update_layout(
+                    title='UMAP Projection of Predicted Lattice Distortion:',
+                    **kwargs_fig
+                )
+                st.plotly_chart(fig, use_container_width=False)
 
-        # Diffusivity
-        with col4:
-            fig = go.Figure()
-            fig.add_trace(
-                go.Scatter(**kwargs_data_all))
-            fig.add_trace(
-                go.Scatter(
-                    **kwargs_data_dis,
-                    marker=dict(
-                        color=data_dis['D (cm^2/s)'],
-                        colorscale='Viridis',
-                        size=5,
-                        symbol='circle',
-                        colorbar=dict(title='D (cm²/s)'),
-                    ),
+            # Atomic Distortion
+            with col3:
+                fig = go.Figure()
+                fig.add_trace(
+                    go.Scatter(**kwargs_data_all))
+                fig.add_trace(
+                    go.Scatter(
+                        **kwargs_data_dis,
+                        marker=dict(
+                            color=data_dis['D_atomic (cm^2/s)'],
+                            colorscale='Viridis',
+                            opacity=0.8,
+                            size=5,
+                            symbol='circle',
+                            colorbar=dict(title='Δ<sub>atomic</sub> (cm²/s)'),
+                        ),
+                    )
                 )
-            )
-            # Add labels for the five elements
-            fig = set_labels_plotly(fig, labels)
-            fig.update_layout(
-                title='UMAP Projection of Predicted Diffusion Coefficient:',
-                **kwargs_fig
-            )
-            st.plotly_chart(fig, use_container_width=False)
+                # Add labels for the five elements
+                fig = set_labels_plotly(fig, labels)
+                fig.update_layout(
+                    title='UMAP Projection of Predicted Atomic Distortion:',
+                    **kwargs_fig
+                )
+                st.plotly_chart(fig, use_container_width=False)
+
+            # Diffusivity
+            with col4:
+                fig = go.Figure()
+                fig.add_trace(
+                    go.Scatter(**kwargs_data_all))
+                fig.add_trace(
+                    go.Scatter(
+                        **kwargs_data_dis,
+                        marker=dict(
+                            color=data_dis['D (cm^2/s)'],
+                            colorscale='Viridis',
+                            opacity=0.8,
+                            size=5,
+                            symbol='circle',
+                            colorbar=dict(title='D (cm²/s)'),
+                        ),
+                    )
+                )
+                # Add labels for the five elements
+                fig = set_labels_plotly(fig, labels)
+                fig.update_layout(
+                    title='UMAP Projection of Predicted Diffusion Coefficient:',
+                    **kwargs_fig
+                )
+                st.plotly_chart(fig, use_container_width=False)
     
 
 
