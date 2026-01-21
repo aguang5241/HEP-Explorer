@@ -1,9 +1,9 @@
 streamlit
-numpy=
+numpy
 pandas
 matplotlib
 plotly
 torch
-pyro-ppl=
+pyro-ppl
 scikit-learn
 umap-learn
