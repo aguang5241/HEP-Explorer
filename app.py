@@ -454,8 +454,8 @@ def main():
                 st.session_state['data_pred_dis'] = data_display(data_pred=data_pred)
                 data_dis = st.session_state['data_pred_dis']
                 data_dis = data_dis[data_dis['D (cm^2/s)'] > 0].reset_index(drop=True)
-                umap_model = joblib.load('res/umap_model.pkl')
-                data_all = joblib.load('res/data_all.pkl')
+                umap_model = joblib.load('res/umap_model_new.pkl')
+                data_all = joblib.load('res/data_all_new.pkl')
                 labels = [
                     'La' if select_site == 'A-site' else 'Co', 
                     data_dis['element_1'].iloc[0], 
@@ -541,7 +541,7 @@ def main():
                     title='UMAP Projection of Predicted Formation Energy:',
                     **kwargs_fig
                 )
-                st.plotly_chart(fig, use_container_width=False)
+                st.plotly_chart(fig, width='stretch')
 
             # Lattice Distortion
             with col2:
@@ -567,7 +567,7 @@ def main():
                     title='UMAP Projection of Predicted Lattice Distortion:',
                     **kwargs_fig
                 )
-                st.plotly_chart(fig, use_container_width=False)
+                st.plotly_chart(fig, width='stretch')
 
             # Atomic Distortion
             with col3:
@@ -593,7 +593,7 @@ def main():
                     title='UMAP Projection of Predicted Atomic Distortion:',
                     **kwargs_fig
                 )
-                st.plotly_chart(fig, use_container_width=False)
+                st.plotly_chart(fig, width='stretch')
 
             # Diffusivity
             with col4:
@@ -619,7 +619,7 @@ def main():
                     title='UMAP Projection of Predicted Diffusion Coefficient:',
                     **kwargs_fig
                 )
-                st.plotly_chart(fig, use_container_width=False)
+                st.plotly_chart(fig, width='stretch')
     
 
 
